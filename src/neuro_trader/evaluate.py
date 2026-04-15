@@ -149,9 +149,18 @@ def run_evaluation(
 ) -> dict[str, EvaluationResult]:
     """Train on train split, evaluate on unseen split, compare against random policy."""
     prices = download_price_data(ticker=ticker, start=start)
-    features = compute_behavioral_signals(prices, lookback=lookback)
+    train_prices, test_prices = _split_train_test(prices, train_ratio=train_ratio)
 
-    train_data, test_data = _split_train_test(features, train_ratio=train_ratio)
+    train_data, normalization_bounds = compute_behavioral_signals(
+        train_prices,
+        lookback=lookback,
+        return_normalization_bounds=True,
+    )
+    test_data = compute_behavioral_signals(
+        test_prices,
+        lookback=lookback,
+        normalization_bounds=normalization_bounds,
+    )
 
     baseline_buy_hold_returns = run_baseline_buy_hold(test_data).dropna()
 

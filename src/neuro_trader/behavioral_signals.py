@@ -12,22 +12,27 @@ import numpy as np
 import pandas as pd
 
 
-def _min_max_normalize(series: pd.Series) -> pd.Series:
-    """Normalize a series to [0, 1] with safe handling for constant values."""
+def _min_max_normalize_with_bounds(series: pd.Series, min_val: float, max_val: float) -> pd.Series:
+    """Normalize series to [0, 1] using externally supplied min/max bounds."""
     finite = series.replace([np.inf, -np.inf], np.nan)
-    min_val = float(finite.min(skipna=True))
-    max_val = float(finite.max(skipna=True))
     if np.isnan(min_val) or np.isnan(max_val) or np.isclose(max_val - min_val, 0.0):
         return pd.Series(0.0, index=series.index)
     normalized = (finite - min_val) / (max_val - min_val)
     return normalized.fillna(0.0).clip(0.0, 1.0)
 
 
+def _compute_min_max_bounds(series: pd.Series) -> tuple[float, float]:
+    finite = series.replace([np.inf, -np.inf], np.nan)
+    return float(finite.min(skipna=True)), float(finite.max(skipna=True))
+
+
 def compute_behavioral_signals(
     prices: pd.DataFrame,
     close_col: str = "Close",
     lookback: int = 20,
-) -> pd.DataFrame:
+    normalization_bounds: dict[str, tuple[float, float]] | None = None,
+    return_normalization_bounds: bool = False,
+) -> pd.DataFrame | tuple[pd.DataFrame, dict[str, tuple[float, float]]]:
     """Compute normalized fear, greed, and stress signals from prices.
 
     Signal definitions:
@@ -49,6 +54,10 @@ def compute_behavioral_signals(
         prices: DataFrame containing at least a close price column.
         close_col: Name of the close-price column.
         lookback: Rolling window length for statistics.
+        normalization_bounds: Optional externally supplied min/max bounds for
+            {'fear', 'greed', 'stress'} used during normalization.
+        return_normalization_bounds: If True, also returns the min/max bounds
+            used for normalization.
 
     Returns:
         DataFrame with original data plus columns:
@@ -79,8 +88,28 @@ def compute_behavioral_signals(
     long_vol = returns.rolling(lookback, min_periods=2).std().replace(0.0, np.nan)
     stress_raw = (short_vol / long_vol).replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
-    df["fear"] = _min_max_normalize(fear_raw)
-    df["greed"] = _min_max_normalize(greed_raw)
-    df["stress"] = _min_max_normalize(stress_raw)
+    if normalization_bounds is None:
+        used_bounds = {
+            "fear": _compute_min_max_bounds(fear_raw),
+            "greed": _compute_min_max_bounds(greed_raw),
+            "stress": _compute_min_max_bounds(stress_raw),
+        }
+    else:
+        required_keys = {"fear", "greed", "stress"}
+        missing_keys = required_keys.difference(normalization_bounds)
+        if missing_keys:
+            missing = ", ".join(sorted(missing_keys))
+            raise ValueError(f"normalization_bounds missing required keys: {missing}")
+        used_bounds = normalization_bounds
 
+    fear_min, fear_max = used_bounds["fear"]
+    greed_min, greed_max = used_bounds["greed"]
+    stress_min, stress_max = used_bounds["stress"]
+
+    df["fear"] = _min_max_normalize_with_bounds(fear_raw, fear_min, fear_max)
+    df["greed"] = _min_max_normalize_with_bounds(greed_raw, greed_min, greed_max)
+    df["stress"] = _min_max_normalize_with_bounds(stress_raw, stress_min, stress_max)
+
+    if return_normalization_bounds:
+        return df, used_bounds
     return df
